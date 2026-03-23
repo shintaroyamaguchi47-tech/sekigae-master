@@ -21,13 +21,13 @@ const SK="sekigae_v5";
 const ld=()=>{try{return JSON.parse(localStorage.getItem(SK))}catch{return null}};
 const svLS=d=>{try{localStorage.setItem(SK,JSON.stringify(d))}catch{}};
 const clr=()=>{try{localStorage.removeItem(SK)}catch{}};
-const ZF=[0,1],ZB=[4,5,6,7];
+
 const shuf=arr=>{const a=[...arr];for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;};
 const gN=(si,cols)=>{const r=Math.floor(si/cols),c=si%cols,n=[];for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){if(!dr&&!dc)continue;const nr=r+dr,nc=c+dc;if(nr>=0&&nc>=0&&nc<cols)n.push(nr*cols+nc);}return n;};
 const gLR=(si,cols)=>{const c=si%cols,n=[];if(c>0)n.push(si-1);if(c<cols-1)n.push(si+1);return n;};
 const parseCSV=text=>{const lines=text.split(/\r?\n/).filter(l=>l.trim());if(!lines.length)return[];const sep=lines[0].includes("\t")?"\t":",";const hdrs=lines[0].split(sep).map(h=>h.replace(/^"|"$/g,"").trim());return lines.slice(1).map(line=>{const vals=line.split(sep).map(v=>v.replace(/^"|"$/g,"").trim());const obj={};hdrs.forEach((h,i)=>{obj[h]=vals[i]||"";});return obj;});};
 
-// Group colors
+// 班の色分け定義
 const GC=[
   {bg:"bg-sky-100",border:"border-sky-300",label:"bg-sky-200 text-sky-800"},
   {bg:"bg-amber-100",border:"border-amber-300",label:"bg-amber-200 text-amber-800"},
@@ -39,32 +39,35 @@ const GC=[
   {bg:"bg-pink-100",border:"border-pink-300",label:"bg-pink-200 text-pink-800"},
 ];
 
-// Check if two adjacent seats are in different groups → draw thick border
 function getBorders(idx, cols, groupMap) {
   const g = groupMap[idx];
   if (g === 0 || g === undefined) return {};
   const row = Math.floor(idx / cols), col = idx % cols;
   const borders = {};
-  // right
   if (col < cols - 1) { const rg = groupMap[idx + 1]; if (rg !== g && rg > 0) borders.right = true; }
-  // bottom
   const bIdx = idx + cols;
   if (bIdx < Object.keys(groupMap).length || groupMap[bIdx] !== undefined) { const bg2 = groupMap[bIdx]; if (bg2 !== undefined && bg2 !== g && bg2 > 0) borders.bottom = true; }
-  // left
   if (col > 0) { const lg = groupMap[idx - 1]; if (lg !== g && lg > 0) borders.left = true; }
-  // top
   if (row > 0) { const tg = groupMap[idx - cols]; if (tg !== g && tg > 0) borders.top = true; }
   return borders;
 }
 
+// 修正1: 前方・後方の動的計算、および妥協ストップの廃止
 function genSeat(students,rows,cols,constraints,history,pinned,genderMix){
-  const ts=rows*cols,fr=ZF.filter(r=>r<rows),br=ZB.filter(r=>r<rows);
+  const ts=rows*cols;
+  // 前方座席: 0行目と1行目（行数に応じてフィルタリング）
+  const fr=[0, 1].filter(r=>r<rows);
+  // 後方座席: 最後の2行（前方の行とは被らないようにする）
+  const br=[rows-1, rows-2].filter(r=>r>=0 && !fr.includes(r));
+  
   const ps=new Map(),pst=new Set();
   Object.entries(pinned).forEach(([sid,seat])=>{if(seat!=null&&seat<ts){ps.set(seat,sid);pst.add(sid);}});
   const sm={};students.forEach(s=>(sm[s.id]=s));
   const up=students.filter(s=>!pst.has(s.id)),nf=up.filter(s=>s.needsFront),pb=up.filter(s=>s.tall&&!s.needsFront),ot=up.filter(s=>!s.needsFront&&!s.tall);
   const sp=constraints.filter(c=>c.type==="separate"),pp=constraints.filter(c=>c.type==="pair");
+  
   let best=null,bs=-Infinity;
+  // 試行回数（600回）を最後まで回し切って、もっとも制約を満たしたものを選ぶ
   for(let att=0;att<600;att++){
     const a=new Array(ts).fill(null);const pl=new Set();let ok=true;
     ps.forEach((sid,seat)=>{a[seat]=sid;pl.add(sid);});
@@ -72,18 +75,30 @@ function genSeat(students,rows,cols,constraints,history,pinned,genderMix){
     const fs=shuf(av(fr.flatMap(r=>Array.from({length:cols},(_,c)=>r*cols+c))));
     for(const s of shuf(nf)){const seat=fs.shift();if(seat!==undefined){a[seat]=s.id;pl.add(s.id);}else{ok=false;break;}}
     if(!ok)continue;
+    
     const bp=shuf(av(br.flatMap(r=>Array.from({length:cols},(_,c)=>r*cols+c))));
-    const mp=shuf(av(Array.from({length:ts},(_,i)=>i).filter(i=>Math.floor(i/cols)>=2)));
+    // 中間座席の計算（前方でも後方でもない行）
+    const mp=shuf(av(Array.from({length:ts},(_,i)=>i).filter(i=>{
+      const r = Math.floor(i/cols);
+      return !fr.includes(r) && !br.includes(r);
+    })));
+    
     for(const s of shuf(pb)){const seat=[...bp,...mp].find(i=>a[i]===null);if(seat!==undefined){a[seat]=s.id;pl.add(s.id);}}
     const rem=shuf(av(Array.from({length:ts},(_,i)=>i)));
     const left=shuf([...ot,...pb.filter(s=>!pl.has(s.id))]);
     for(let i=0;i<left.length&&i<rem.length;i++){a[rem[i]]=left[i].id;pl.add(left[i].id);}
+    
     let sc=0;
     for(const{studentA:sA,studentB:sB}of sp){const pA=a.indexOf(sA),pB=a.indexOf(sB);if(pA===-1||pB===-1)continue;sc+=gN(pA,cols).includes(pB)?-100:20;}
     for(const{studentA:sA,studentB:sB}of pp){const pA=a.indexOf(sA),pB=a.indexOf(sB);if(pA===-1||pB===-1)continue;sc+=gN(pA,cols).includes(pB)?30:-50;}
     if(genderMix){for(let seat=0;seat<ts;seat++){if(!a[seat])continue;const st=sm[a[seat]];if(!st||!st.gender)continue;for(const nb of gLR(seat,cols)){if(!a[nb])continue;const ns=sm[a[nb]];if(!ns||!ns.gender)continue;sc+=st.gender!==ns.gender?8:-5;}}}
     if(history.length>0){const last=history[history.length-1];for(let seat=0;seat<ts;seat++){if(!a[seat])continue;const cn=gN(seat,cols).map(n=>a[n]).filter(Boolean);for(const prev of last){if(prev.studentId===a[seat]){for(const c of cn){if((prev.neighbors||[]).includes(c))sc-=15;}}}}}
-    if(sc>bs){bs=sc;best=[...a];}if(bs>=0&&att>80)break;
+    
+    if(sc>bs){
+      bs=sc;
+      best=[...a];
+    }
+    // 修正: 途中で妥協せず最後まで探索させるため、break条件を削除
   }
   return best;
 }
@@ -93,14 +108,35 @@ function Badge({children,color="blue",onRemove}){
   return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${c[color]||c.blue}`}>{children}{onRemove&&<button onClick={onRemove} className="hover:opacity-70 ml-0.5">×</button>}</span>;
 }
 
+// 修正2: CSV文字化け対策（Shift-JISデコード）
 function ExcelImport({onImport,existingNames}){
   const fr=useRef(null);const[preview,setPreview]=useState(null);const[headers,setHeaders]=useState([]);
   const[mapping,setMapping]=useState({name:"",needsFront:"",tall:"",gender:""});const[rawData,setRawData]=useState([]);
   const[error,setError]=useState("");const[loading,setLoading]=useState(false);
   const autoMap=hdrs=>({name:hdrs.find(h=>/名前|氏名|name|生徒/i.test(h))||hdrs[0],needsFront:hdrs.find(h=>/視力|前方|front|めがね|配慮/i.test(h))||"",tall:hdrs.find(h=>/身長|高|tall/i.test(h))||"",gender:hdrs.find(h=>/性別|gender|sex|男女/i.test(h))||""});
   const proc=json=>{if(!json.length){setError("データなし");return;}const h=Object.keys(json[0]);setHeaders(h);setRawData(json);setMapping(autoMap(h));setPreview(json.slice(0,5));};
-  const handleFile=async e=>{const file=e.target.files?.[0];if(!file)return;setError("");setLoading(true);try{if(/\.(csv|tsv|txt)$/i.test(file.name))proc(parseCSV(await file.text()));else{const buf=await file.arrayBuffer();const wb=XLSX.read(new Uint8Array(buf),{type:"array"});proc(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""}));}}catch(err){setError("失敗:"+err.message);}finally{setLoading(false);}};
+  
+  const handleFile=async e=>{
+    const file=e.target.files?.[0];if(!file)return;
+    setError("");setLoading(true);
+    try{
+      const buf=await file.arrayBuffer();
+      if(/\.(csv|tsv|txt)$/i.test(file.name)) {
+        // UTF-8でデコードしてみて、文字化け特有の記号()があればShift-JISで再デコード
+        let text = new TextDecoder("utf-8").decode(buf);
+        if (text.includes("")) {
+          text = new TextDecoder("shift-jis").decode(buf);
+        }
+        proc(parseCSV(text));
+      } else {
+        const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
+        proc(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:""}));
+      }
+    }catch(err){setError("失敗:"+err.message);}finally{setLoading(false);}
+  };
+  
   const doImport=()=>{if(!mapping.name){setError("名前列を選択");return;}const isTr=v=>{if(typeof v==="boolean")return v;if(typeof v==="number")return v>0;if(typeof v==="string")return/^(○|◯|〇|true|yes|1|はい|あり)/i.test(v.trim());return false;};const pG=v=>{const s=String(v||"").trim();if(/^(男|male|m|M|1)$/.test(s))return"M";if(/^(女|female|f|F|2)$/.test(s))return"F";return"";};const ns=[];let sk=0;for(const row of rawData){const name=String(row[mapping.name]||"").trim();if(!name)continue;if(existingNames.includes(name)){sk++;continue;}ns.push({id:`s_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,name,needsFront:mapping.needsFront?isTr(row[mapping.needsFront]):false,tall:mapping.tall?isTr(row[mapping.tall]):false,gender:mapping.gender?pG(row[mapping.gender]):""});}onImport(ns,sk);setPreview(null);setRawData([]);setHeaders([]);if(fr.current)fr.current.value="";};
+  
   return <div className="space-y-4">
     <div><label className="block text-xs font-semibold text-slate-500 mb-2 uppercase tracking-wide">ファイル選択</label><input ref={fr} type="file" accept=".xlsx,.xls,.csv,.tsv,.txt" onChange={handleFile} className="block w-full text-sm text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-sky-50 file:text-sky-600 hover:file:bg-sky-100 cursor-pointer"/><p className="mt-2 text-xs text-slate-400">「名前」「性別」「視力」「身長」を自動認識</p></div>
     {loading&&<p className="text-sm text-sky-500 flex items-center gap-2"><span className="w-4 h-4 border-2 border-sky-300 border-t-sky-600 rounded-full animate-spin"/>読込中</p>}
@@ -135,7 +171,6 @@ function ConstraintForm({students,onAdd}){
   </div>;
 }
 
-// Seat Grid — supports groupMap paint, pin, swap
 function SeatGrid({assignment,students,rows,cols,constraints,pinned,onPinMode,pinMode,selectedStudent,groupMap,paintMode,paintGroup,onPaint,swapMode,swapFirst,onSeatClick}){
   const sm=useMemo(()=>{const m={};students.forEach(s=>(m[s.id]=s));return m;},[students]);
   const pS=useMemo(()=>{const s=new Set();Object.entries(pinned).forEach(([sid,seat])=>{if(seat!=null)s.add(sid);});return s;},[pinned]);
@@ -168,7 +203,6 @@ function SeatGrid({assignment,students,rows,cols,constraints,pinned,onPinMode,pi
         let borderColor=gc?gc.border:"border-slate-200";
         let extraStyle={minHeight:"50px"};
 
-        // Thick borders between groups
         if(borders.right)extraStyle.borderRightWidth="4px";
         if(borders.bottom)extraStyle.borderBottomWidth="4px";
         if(borders.left)extraStyle.borderLeftWidth="4px";
@@ -212,7 +246,6 @@ function App(){
   const[pinned,setPinned]=useState({});const[pinMode,setPinMode]=useState(false);const[pinStudent,setPinStudent]=useState("");
   const[showImport,setShowImport]=useState(false);const[importMsg,setImportMsg]=useState("");
   const[genderMix,setGenderMix]=useState(false);
-  // groupMap: {seatIdx: groupNumber(1-8), ...} — 0 or missing = no group
   const[groupMap,setGroupMap]=useState({});
   const[paintMode,setPaintMode]=useState(false);
   const[paintGroup,setPaintGroup]=useState(1);
@@ -297,7 +330,6 @@ function App(){
           </div>
         </div>
 
-        {/* Group paint */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
           <div className="flex items-center justify-between mb-2">
             <div><h2 className="text-sm font-bold text-slate-700">班分け設定 🎨</h2><p className="text-xs text-slate-400 mt-0.5">班番号を選んで座席をクリック／ドラッグで塗り分け</p></div>
@@ -320,7 +352,6 @@ function App(){
           {usedGroups.length>0&&<div className="mt-4 flex flex-wrap gap-2">{usedGroups.map(g=><span key={g} className={`px-3 py-1 rounded-full text-xs font-bold ${GC[(g-1)%GC.length].label}`}>{g}班: {groupCounts[g]||0}席</span>)}</div>}
         </div>
 
-        {/* Pin */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
           <h2 className="text-sm font-bold text-slate-700 mb-1">座席固定 📌</h2>
           <p className="text-xs text-slate-400 mb-4">特定の生徒を決まった席に固定</p>
